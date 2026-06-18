@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AWG Panel</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="container">AWG</p>
+          <h1>VPN peers</h1>
+        </div>
+        <div class="summary">
+          <span id="online-count">0 online</span>
+          <span id="updated-at">...</span>
+        </div>
+      </header>
+
+      <section class="stats-grid">
+        <article>
+          <span>Peers</span>
+          <strong id="peer-count">0</strong>
+        </article>
+        <article>
+          <span>Online</span>
+          <strong id="peer-online">0</strong>
+        </article>
+        <article>
+          <span>RX total</span>
+          <strong id="rx-total">0 B</strong>
+        </article>
+        <article>
+          <span>TX total</span>
+          <strong id="tx-total">0 B</strong>
+        </article>
+      </section>
+
+      <section class="toolbar">
+        <button id="refresh" type="button">Refresh</button>
+      </section>
+
+      <form id="add-peer" class="add-peer">
+        <input id="peer-title" type="text" placeholder="New peer name" maxlength="80" autocomplete="off" required />
+        <button id="add-peer-button" type="submit">Add peer</button>
+      </form>
+
+      <section id="error" class="error" hidden></section>
+      <section id="peers" class="peer-list"></section>
+    </main>
+
+    <template id="peer-template">
+      <article class="peer-card">
+        <div class="peer-head">
+          <div class="peer-main">
+            <span class="status-dot"></span>
+            <input class="peer-name" />
+          </div>
+          <button class="toggle" type="button"></button>
+        </div>
+        <div class="peer-actions">
+          <button class="config-button" type="button">QR / Config</button>
+          <button class="delete-button" type="button">Delete</button>
+        </div>
+        <div class="peer-meta">
+          <span class="allowed"></span>
+          <span class="endpoint"></span>
+          <span class="handshake"></span>
+        </div>
+        <div class="traffic">
+          <div>
+            <span>RX</span>
+            <strong class="rx"></strong>
+            <small class="rx-rate"></small>
+          </div>
+          <div>
+            <span>TX</span>
+            <strong class="tx"></strong>
+            <small class="tx-rate"></small>
+          </div>
+        </div>
+        <div class="key"></div>
+      </article>
+    </template>
+
+    <dialog id="config-modal" class="modal">
+      <div class="modal-head">
+        <strong id="modal-title">Peer config</strong>
+        <button id="modal-close" type="button">Close</button>
+      </div>
+      <div class="qr-wrap">
+        <img id="qr-image" alt="Peer QR code" />
+      </div>
+      <div id="qr-caption" class="qr-caption">Amnezia QR</div>
+      <label class="field-label" for="vpn-key-text">Amnezia vpn:// key</label>
+      <textarea id="vpn-key-text" readonly spellcheck="false"></textarea>
+      <label class="field-label" for="config-text">Config</label>
+      <textarea id="config-text" readonly spellcheck="false"></textarea>
+      <div class="modal-actions">
+        <button id="copy-vpn-key" type="button">Copy vpn:// key</button>
+        <button id="copy-config" type="button">Copy config</button>
+      </div>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

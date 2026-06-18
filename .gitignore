@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+
+data/
+cert/
+*.pem
+*.key
+
+__pycache__/
+*.py[cod]
+
+.DS_Store
