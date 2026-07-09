@@ -1,0 +1,4 @@
+109-107-174-205.nip.io {
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    reverse_proxy awg-panel:8080
+}

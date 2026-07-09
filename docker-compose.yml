@@ -18,8 +18,15 @@ services:
       TLS_CERT: /cert/fullchain.pem
       TLS_KEY: /cert/privkey.pem
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./data:/data
       - ${CERT_DIR:-./cert}:/cert:ro
     ports:
       - "${PANEL_PORT:-8080}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,noexec,nosuid,size=32m
+    pids_limit: 64
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true

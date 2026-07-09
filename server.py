@@ -37,6 +37,7 @@ VPN_DNS = os.environ.get("VPN_DNS", "1.1.1.1")
 CLIENT_ALLOWED_IPS = os.environ.get("CLIENT_ALLOWED_IPS", "0.0.0.0/0, ::/0")
 CLIENT_MTU = os.environ.get("CLIENT_MTU", "1420")
 CLIENT_KEEPALIVE = os.environ.get("CLIENT_KEEPALIVE", "25")
+MAX_REQUEST_BYTES = 16 * 1024
 
 STATE_LOCK = threading.Lock()
 SAMPLE_LOCK = threading.Lock()
@@ -106,14 +107,15 @@ def demux_docker_output(output):
 
 
 def load_state():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(DATA_DIR, 0o700)
     if not STATE_FILE.exists():
-        return {"names": {}, "disabled": {}, "saved": {}, "clients": {}}
+        return {"names": {}, "disabled": {}, "saved": {}, "traffic": {}, "clients": {}, "order": []}
     try:
         with STATE_FILE.open("r", encoding="utf-8") as f:
             state = json.load(f)
     except json.JSONDecodeError:
-        state = {"names": {}, "disabled": {}, "saved": {}, "clients": {}}
+        state = {"names": {}, "disabled": {}, "saved": {}, "traffic": {}, "clients": {}, "order": []}
     state.setdefault("names", {})
     state.setdefault("disabled", {})
     state.setdefault("saved", {})
@@ -124,11 +126,14 @@ def load_state():
 
 
 def save_state(state):
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(DATA_DIR, 0o700)
     tmp = STATE_FILE.with_suffix(".tmp")
     with tmp.open("w", encoding="utf-8") as f:
+        os.chmod(tmp, 0o600)
         json.dump(state, f, ensure_ascii=False, indent=2, sort_keys=True)
     tmp.replace(STATE_FILE)
+    os.chmod(STATE_FILE, 0o600)
 
 
 def key_id(public_key):
@@ -679,6 +684,18 @@ def check_auth(header):
 class Handler(BaseHTTPRequestHandler):
     server_version = "AWGPanel/1.0"
 
+    def end_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; "
+            "img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
+        )
+        super().end_headers()
+
     def log_message(self, fmt, *args):
         print("%s - %s" % (self.address_string(), fmt % args), flush=True)
 
@@ -708,9 +725,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def read_json(self):
-        size = int(self.headers.get("Content-Length", "0"))
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("Invalid Content-Length") from exc
         if size <= 0:
             return {}
+        if size > MAX_REQUEST_BYTES:
+            raise ValueError("Request body is too large")
         return json.loads(self.rfile.read(size).decode("utf-8"))
 
     def do_GET(self):
@@ -763,7 +785,7 @@ class Handler(BaseHTTPRequestHandler):
         path = "/index.html" if parsed.path == "/" else parsed.path
         static_root = Path(__file__).resolve().parent / "static"
         target = (static_root / path.lstrip("/")).resolve()
-        if not str(target).startswith(str(static_root.resolve())) or not target.exists() or target.is_dir():
+        if not target.is_relative_to(static_root.resolve()) or not target.exists() or target.is_dir():
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         content_type = "text/html; charset=utf-8"
@@ -814,7 +836,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     if not ADMIN_PASSWORD:
-        print("WARNING: PANEL_PASSWORD is empty; panel is unauthenticated", flush=True)
+        raise RuntimeError("PANEL_PASSWORD must be set")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     scheme = "http"
