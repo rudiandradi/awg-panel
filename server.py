@@ -13,6 +13,7 @@ import struct
 import subprocess
 import threading
 import time
+import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,11 +38,33 @@ VPN_DNS = os.environ.get("VPN_DNS", "1.1.1.1")
 CLIENT_ALLOWED_IPS = os.environ.get("CLIENT_ALLOWED_IPS", "0.0.0.0/0, ::/0")
 CLIENT_MTU = os.environ.get("CLIENT_MTU", "1420")
 CLIENT_KEEPALIVE = os.environ.get("CLIENT_KEEPALIVE", "25")
+ROUTING_DIR = DATA_DIR / "routing"
+ROUTING_FILE = ROUTING_DIR / "roscomvpn-amnezia.json"
+ROUTING_META_FILE = ROUTING_DIR / "roscomvpn-amnezia.meta.json"
+ROUTING_REFRESH_SECONDS = int(os.environ.get("ROSCOMVPN_REFRESH_SECONDS", "86400"))
+ROSCOMVPN_INCLUDE_DIRECT = os.environ.get("ROSCOMVPN_INCLUDE_DIRECT", "false").lower() in ("1", "true", "yes")
+ROSCOMVPN_GEOIP_SOURCES = {
+    "direct": os.environ.get(
+        "ROSCOMVPN_DIRECT_URL",
+        "https://cdn.jsdelivr.net/gh/hydraponique/roscomvpn-geoip/release/text/direct.txt",
+    ),
+    "whitelist": os.environ.get(
+        "ROSCOMVPN_WHITELIST_URL",
+        "https://cdn.jsdelivr.net/gh/hydraponique/roscomvpn-geoip/release/text/whitelist.txt",
+    ),
+    "private": os.environ.get(
+        "ROSCOMVPN_PRIVATE_URL",
+        "https://cdn.jsdelivr.net/gh/hydraponique/roscomvpn-geoip/release/text/private.txt",
+    ),
+}
+ROSCOMVPN_GEOIP_CATEGORIES = (("direct",) if ROSCOMVPN_INCLUDE_DIRECT else ()) + ("whitelist", "private")
+ROUTING_MODE = "full" if ROSCOMVPN_INCLUDE_DIRECT else "compatible"
 MAX_REQUEST_BYTES = 16 * 1024
 
 STATE_LOCK = threading.Lock()
 SAMPLE_LOCK = threading.Lock()
 LAST_SAMPLE = {}
+ROUTING_LOCK = threading.Lock()
 
 
 class UnixHTTPConnection(http.client.HTTPConnection):
@@ -134,6 +157,96 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2, sort_keys=True)
     tmp.replace(STATE_FILE)
     os.chmod(STATE_FILE, 0o600)
+
+
+def load_routing_meta():
+    if not ROUTING_META_FILE.exists():
+        return {}
+    try:
+        with ROUTING_META_FILE.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def routing_status():
+    meta = load_routing_meta()
+    generated_at = int(meta.get("generatedAt", 0) or 0)
+    return {
+        "available": ROUTING_FILE.exists(),
+        "generatedAt": generated_at or None,
+        "count": int(meta.get("count", 0) or 0),
+        "stale": not generated_at or meta.get("mode") != ROUTING_MODE or time.time() - generated_at >= ROUTING_REFRESH_SECONDS,
+        "sources": meta.get("sources", [ROSCOMVPN_GEOIP_SOURCES[name] for name in ROSCOMVPN_GEOIP_CATEGORIES]),
+        "mode": meta.get("mode", ROUTING_MODE),
+    }
+
+
+def fetch_cidr_list(url):
+    request = urllib.request.Request(url, headers={"User-Agent": "AWG-Panel-RoscomVPN/1.0"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        raw = response.read(8 * 1024 * 1024 + 1)
+    if len(raw) > 8 * 1024 * 1024:
+        raise ValueError(f"Routing source is too large: {url}")
+
+    cidrs = []
+    for line in raw.decode("utf-8").splitlines():
+        item = line.split("#", 1)[0].strip()
+        if not item:
+            continue
+        try:
+            network = ipaddress.ip_network(item, strict=False)
+        except ValueError as exc:
+            raise ValueError(f"Invalid CIDR in {url}: {item}") from exc
+        if isinstance(network, ipaddress.IPv4Network):
+            cidrs.append(str(network))
+    if not cidrs:
+        raise ValueError(f"Routing source has no IPv4 CIDRs: {url}")
+    return cidrs
+
+
+def refresh_routing():
+    # Amnezia's import format is an array of {hostname, ip}; CIDRs go into hostname.
+    # Amnezia rejects the 42k+ entry full list. whitelist + private is the compatible
+    # default; direct can be included explicitly for clients that support it.
+    with ROUTING_LOCK:
+        seen = set()
+        cidrs = []
+        for category in ROSCOMVPN_GEOIP_CATEGORIES:
+            url = ROSCOMVPN_GEOIP_SOURCES[category]
+            for cidr in fetch_cidr_list(url):
+                if cidr not in seen:
+                    seen.add(cidr)
+                    cidrs.append(cidr)
+
+        payload = [{"hostname": cidr, "ip": ""} for cidr in cidrs]
+        metadata = {
+            "generatedAt": int(time.time()),
+            "count": len(payload),
+            "sources": [ROSCOMVPN_GEOIP_SOURCES[name] for name in ROSCOMVPN_GEOIP_CATEGORIES],
+            "mode": ROUTING_MODE,
+        }
+        ROUTING_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(ROUTING_DIR, 0o700)
+        for path, data in ((ROUTING_FILE, payload), (ROUTING_META_FILE, metadata)):
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                os.chmod(tmp, 0o600)
+                json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+            tmp.replace(path)
+            os.chmod(path, 0o600)
+        return routing_status()
+
+
+def routing_updater():
+    while True:
+        try:
+            if routing_status()["stale"]:
+                status = refresh_routing()
+                print(f"RoscomVPN routing updated: {status['count']} CIDRs", flush=True)
+        except Exception as exc:
+            print(f"RoscomVPN routing update failed: {exc}", flush=True)
+        time.sleep(max(60, ROUTING_REFRESH_SECONDS))
 
 
 def key_id(public_key):
@@ -716,10 +829,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def send_bytes(self, status, content_type, data):
+    def send_bytes(self, status, content_type, data, headers=None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -744,6 +859,22 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.OK, get_status())
             except Exception as exc:
                 self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+            return
+        if parsed.path == "/api/routing/status":
+            self.send_json(HTTPStatus.OK, routing_status())
+            return
+        if parsed.path == "/api/routing/roscomvpn-amnezia.json":
+            try:
+                if routing_status()["stale"]:
+                    refresh_routing()
+                self.send_bytes(
+                    HTTPStatus.OK,
+                    "application/json; charset=utf-8",
+                    ROUTING_FILE.read_bytes(),
+                    {"Content-Disposition": 'attachment; filename="roscomvpn-amnezia.json"'},
+                )
+            except Exception as exc:
+                self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(exc)})
             return
         parts = [unquote(part) for part in parsed.path.split("/") if part]
         if len(parts) == 4 and parts[:2] == ["api", "peers"] and parts[3] in ("config", "qr.svg", "qr.png"):
@@ -811,6 +942,9 @@ class Handler(BaseHTTPRequestHandler):
                 public_key = add_peer(body.get("name", ""))
                 self.send_json(HTTPStatus.CREATED, {"publicKey": public_key, "status": get_status()})
                 return
+            if len(parts) == 3 and parts == ["api", "routing", "refresh"]:
+                self.send_json(HTTPStatus.OK, refresh_routing())
+                return
             if len(parts) == 4 and parts[:2] == ["api", "peers"]:
                 public_key = parts[2]
                 action = parts[3]
@@ -838,6 +972,7 @@ def main():
     if not ADMIN_PASSWORD:
         raise RuntimeError("PANEL_PASSWORD must be set")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    threading.Thread(target=routing_updater, name="roscomvpn-routing", daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     scheme = "http"
     if TLS_CERT and TLS_KEY:

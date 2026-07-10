@@ -14,6 +14,9 @@ const vpnKeyText = document.querySelector("#vpn-key-text");
 const configText = document.querySelector("#config-text");
 const copyVpnKey = document.querySelector("#copy-vpn-key");
 const copyConfig = document.querySelector("#copy-config");
+const routingStatusEl = document.querySelector("#routing-status");
+const routingDownloadEl = document.querySelector("#routing-download");
+const routingRefreshEl = document.querySelector("#routing-refresh");
 let latest = null;
 let busy = false;
 let qrTimer = null;
@@ -30,11 +33,11 @@ function bytes(value) {
 }
 
 function since(seconds) {
-  if (seconds === null || seconds === undefined) return "no handshake";
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
+  if (seconds === null || seconds === undefined) return "нет соединения";
+  if (seconds < 60) return `${seconds} сек. назад`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} мин. назад`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} ч. назад`;
+  return `${Math.floor(seconds / 86400)} дн. назад`;
 }
 
 function setError(message) {
@@ -62,12 +65,24 @@ function updateSummary(data) {
   const rx = enabled.reduce((sum, peer) => sum + Number(peer.rxBytes || 0), 0);
   const tx = enabled.reduce((sum, peer) => sum + Number(peer.txBytes || 0), 0);
   document.querySelector("#container").textContent = `${data.container} / ${data.interface?.name || "awg0"}`;
-  document.querySelector("#online-count").textContent = `${online.length} online`;
+  document.querySelector("#online-count").textContent = `${online.length} онлайн`;
   document.querySelector("#peer-count").textContent = String(peers.length);
   document.querySelector("#peer-online").textContent = String(online.length);
   document.querySelector("#rx-total").textContent = bytes(rx);
   document.querySelector("#tx-total").textContent = bytes(tx);
   document.querySelector("#updated-at").textContent = new Date((data.updatedAt || 0) * 1000).toLocaleTimeString();
+}
+
+function updateRouting(data) {
+  if (!data?.available) {
+    routingStatusEl.textContent = "Список ещё формируется. Обновите страницу через несколько секунд.";
+    routingDownloadEl.disabled = true;
+    return;
+  }
+  const updated = data.generatedAt ? new Date(data.generatedAt * 1000).toLocaleString() : "неизвестно";
+  const mode = data.mode === "full" ? "полный" : "совместимый";
+  routingStatusEl.textContent = `${Number(data.count || 0).toLocaleString("ru-RU")} IPv4-подсетей · ${mode} набор · обновлено ${updated}${data.stale ? " · требуется обновление" : ""}`;
+  routingDownloadEl.disabled = false;
 }
 
 function render() {
@@ -98,14 +113,14 @@ function render() {
     const toggle = node.querySelector(".toggle");
     toggle.classList.toggle("is-active", peer.enabled);
     toggle.setAttribute("aria-pressed", String(peer.enabled));
-    toggle.setAttribute("aria-label", peer.enabled ? "Disable peer" : "Enable peer");
-    toggle.title = peer.enabled ? "Disable peer" : "Enable peer";
+    toggle.setAttribute("aria-label", peer.enabled ? "Отключить устройство" : "Включить устройство");
+    toggle.title = peer.enabled ? "Отключить устройство" : "Включить устройство";
     toggle.innerHTML = `
       <span class="toggle-track" aria-hidden="true">
         <span class="toggle-glow"></span>
         <span class="toggle-thumb"></span>
       </span>
-      <span class="toggle-state">${peer.enabled ? "On" : "Off"}</span>
+      <span class="toggle-state">${peer.enabled ? "Вкл" : "Выкл"}</span>
     `;
     toggle.addEventListener("click", async () => {
       const action = peer.enabled ? "disable" : "enable";
@@ -120,7 +135,7 @@ function render() {
 
     const configButton = node.querySelector(".config-button");
     configButton.disabled = !peer.hasConfig;
-    configButton.textContent = peer.hasConfig ? "QR / Config" : "No QR";
+    configButton.textContent = peer.hasConfig ? "QR и конфиг" : "Нет конфига";
     configButton.addEventListener("click", async () => {
       await showConfig(peer);
     });
@@ -128,7 +143,7 @@ function render() {
     const deleteButton = node.querySelector(".delete-button");
     deleteButton.addEventListener("click", async () => {
       const label = peer.name || peer.allowedIps || peer.id;
-      if (!confirm(`Delete peer "${label}" completely?`)) return;
+      if (!confirm(`Удалить устройство «${label}» без возможности восстановления?`)) return;
       await runAction(async () => {
         latest = await api(`/api/peers/${encodeURIComponent(peer.publicKey)}/delete`, {
           method: "POST",
@@ -138,11 +153,16 @@ function render() {
       });
     });
 
-    node.querySelector(".allowed").textContent = peer.allowedIps || "no allowed IPs";
-    node.querySelector(".endpoint").textContent = peer.endpoint || "no endpoint";
+    node.querySelector(".peer-status").textContent = !peer.enabled
+      ? "Доступ приостановлен"
+      : peer.online
+        ? "Подключено сейчас"
+        : "Ожидает подключения";
+    node.querySelector(".allowed").textContent = peer.allowedIps || "нет разрешённых IP";
+    node.querySelector(".endpoint").textContent = peer.endpoint || "ещё не подключалось";
     node.querySelector(".handshake").textContent = peer.enabled
-      ? `handshake ${since(peer.secondsSinceHandshake)}`
-      : "disabled";
+      ? `последний handshake: ${since(peer.secondsSinceHandshake)}`
+      : "доступ отключён";
     node.querySelector(".rx").textContent = bytes(peer.rxBytes);
     node.querySelector(".tx").textContent = bytes(peer.txBytes);
     node.querySelector(".rx-rate").textContent = `${bytes(peer.rxRate)}/s`;
@@ -157,7 +177,8 @@ async function refresh() {
   await runAction(async () => {
     latest = await api("/api/status");
     render();
-  }, true);
+    updateRouting(await api("/api/routing/status"));
+  }, true, true);
 }
 
 async function addPeer(event) {
@@ -188,15 +209,17 @@ async function showConfig(peer) {
   vpnKeyText.value = data.vpnKey || "";
   configText.value = data.config;
   qrImage.src = `/api/peers/${encodeURIComponent(peer.publicKey)}/qr.png?format=native&ts=${Date.now()}`;
-  qrCaption.textContent = "Native AWG QR (PNG)";
+  qrCaption.textContent = "QR-код AmneziaWG";
   modal.showModal();
 }
 
-async function runAction(fn, quiet = false) {
+async function runAction(fn, quiet = false, background = false) {
   if (busy) return;
   busy = true;
-  refreshEl.disabled = true;
-  addPeerButton.disabled = true;
+  if (!background) {
+    refreshEl.disabled = true;
+    addPeerButton.disabled = true;
+  }
   if (!quiet) setError("");
   try {
     await fn();
@@ -205,12 +228,24 @@ async function runAction(fn, quiet = false) {
     setError(error.message);
   } finally {
     busy = false;
-    refreshEl.disabled = false;
-    addPeerButton.disabled = false;
+    if (!background) {
+      refreshEl.disabled = false;
+      addPeerButton.disabled = false;
+    }
   }
 }
 
 refreshEl.addEventListener("click", refresh);
+routingDownloadEl.addEventListener("click", () => {
+  window.location.assign("/api/routing/roscomvpn-amnezia.json");
+});
+routingRefreshEl.addEventListener("click", async () => {
+  await runAction(async () => {
+    routingRefreshEl.disabled = true;
+    updateRouting(await api("/api/routing/refresh", { method: "POST", body: JSON.stringify({}) }));
+  });
+  routingRefreshEl.disabled = false;
+});
 addPeerForm.addEventListener("submit", addPeer);
 modalClose.addEventListener("click", () => modal.close());
 modal.addEventListener("close", () => {
@@ -221,16 +256,16 @@ modal.addEventListener("close", () => {
 });
 copyConfig.addEventListener("click", async () => {
   await navigator.clipboard.writeText(configText.value);
-  copyConfig.textContent = "Copied";
+  copyConfig.textContent = "Скопировано";
   setTimeout(() => {
-    copyConfig.textContent = "Copy config";
+    copyConfig.textContent = "Скопировать конфиг";
   }, 1200);
 });
 copyVpnKey.addEventListener("click", async () => {
   await navigator.clipboard.writeText(vpnKeyText.value);
-  copyVpnKey.textContent = "Copied";
+  copyVpnKey.textContent = "Скопировано";
   setTimeout(() => {
-    copyVpnKey.textContent = "Copy vpn:// key";
+    copyVpnKey.textContent = "Скопировать ссылку";
   }, 1200);
 });
 refresh();

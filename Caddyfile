@@ -2,3 +2,10 @@
     header Strict-Transport-Security "max-age=31536000; includeSubDomains"
     reverse_proxy awg-panel:8080
 }
+
+glances.109-107-174-205.nip.io {
+    basic_auth {
+        admin $2a$14$MBu5o1xhdO6EJeQ13W4zAOe5EEKynxd4zmKLmXB8vsHDK8zCEOQpS
+    }
+    reverse_proxy glances:61208
+}

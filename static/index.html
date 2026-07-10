@@ -7,48 +7,86 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
+    <div class="orb orb-one" aria-hidden="true"></div>
+    <div class="orb orb-two" aria-hidden="true"></div>
     <main class="shell">
       <header class="topbar">
-        <div>
-          <p class="eyebrow" id="container">AWG</p>
-          <h1>VPN peers</h1>
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 2.5 20 6v5.2c0 5.1-3.3 8.8-8 10.3-4.7-1.5-8-5.2-8-10.3V6l8-3.5Z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></svg>
+          </div>
+          <div>
+            <p class="eyebrow" id="container">AWG</p>
+            <h1>VPN control</h1>
+          </div>
         </div>
-        <div class="summary">
-          <span id="online-count">0 online</span>
-          <span id="updated-at">...</span>
+        <div class="topbar-actions">
+          <div class="summary">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span id="online-count">0 онлайн</span>
+            <span class="updated">обновлено <span id="updated-at">…</span></span>
+          </div>
+          <button id="refresh" class="icon-button" type="button" title="Обновить данные" aria-label="Обновить данные">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5.3"/><path d="M20 4v7h-7"/></svg>
+          </button>
         </div>
       </header>
 
       <section class="stats-grid">
-        <article>
-          <span>Peers</span>
+        <article class="stat-card">
+          <span class="stat-icon blue" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M16 20v-1.5A3.5 3.5 0 0 0 12.5 15h-5A3.5 3.5 0 0 0 4 18.5V20"/><circle cx="10" cy="7" r="3"/><path d="M16 4.5a3 3 0 0 1 0 5.7M20 20v-1.4a3.4 3.4 0 0 0-2.5-3.3"/></svg></span>
+          <span>Устройства</span>
           <strong id="peer-count">0</strong>
         </article>
-        <article>
-          <span>Online</span>
+        <article class="stat-card">
+          <span class="stat-icon green" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 12a8 8 0 1 1 2.3 5.7"/><path d="m4 16 .1-4.1L8 12"/><path d="m9 12 2 2 4-4"/></svg></span>
+          <span>Сейчас онлайн</span>
           <strong id="peer-online">0</strong>
         </article>
-        <article>
-          <span>RX total</span>
+        <article class="stat-card">
+          <span class="stat-icon violet" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 4v16M7 9l5-5 5 5"/><path d="M5 20h14"/></svg></span>
+          <span>Получено</span>
           <strong id="rx-total">0 B</strong>
         </article>
-        <article>
-          <span>TX total</span>
+        <article class="stat-card">
+          <span class="stat-icon amber" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 20V4M17 15l-5 5-5-5"/><path d="M5 4h14"/></svg></span>
+          <span>Отправлено</span>
           <strong id="tx-total">0 B</strong>
         </article>
       </section>
 
-      <section class="toolbar">
-        <button id="refresh" type="button">Refresh</button>
+      <section class="routing-card" aria-labelledby="routing-title">
+        <div class="routing-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z"/><path d="M3.5 12h17M12 3c2.2 2.5 3.2 5.5 3.2 9s-1 6.5-3.2 9c-2.2-2.5-3.2-5.5-3.2-9s1-6.5 3.2-9Z"/></svg></div>
+        <div class="routing-content">
+          <p class="eyebrow">RoscomVPN GeoIP · split tunneling</p>
+          <h2 id="routing-title">Российские сайты без VPN</h2>
+          <p class="routing-copy">
+            Совместимый с Amnezia список критичных IPv4-подсетей для исключения из туннеля.
+            В клиенте выберите режим «Адреса из списка не должны использовать VPN» и импортируйте файл.
+          </p>
+          <p id="routing-status" class="routing-status">Проверяем список…</p>
+        </div>
+        <div class="routing-actions">
+          <button id="routing-download" class="primary-button" type="button">Скачать для Amnezia</button>
+          <button id="routing-refresh" class="secondary-button" type="button">Обновить</button>
+        </div>
       </section>
 
-      <form id="add-peer" class="add-peer">
-        <input id="peer-title" type="text" placeholder="New peer name" maxlength="80" autocomplete="off" required />
-        <button id="add-peer-button" type="submit">Add peer</button>
-      </form>
+      <section class="peers-section" aria-labelledby="peers-title">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Управление доступом</p>
+            <h2 id="peers-title">Устройства</h2>
+          </div>
+          <form id="add-peer" class="add-peer">
+            <input id="peer-title" type="text" placeholder="Название нового устройства" maxlength="80" autocomplete="off" required />
+            <button id="add-peer-button" class="primary-button" type="submit">Добавить</button>
+          </form>
+        </div>
 
-      <section id="error" class="error" hidden></section>
-      <section id="peers" class="peer-list"></section>
+        <section id="error" class="error" hidden></section>
+        <section id="peers" class="peer-list"></section>
+      </section>
     </main>
 
     <template id="peer-template">
@@ -56,13 +94,13 @@
         <div class="peer-head">
           <div class="peer-main">
             <span class="status-dot"></span>
-            <input class="peer-name" />
+            <div class="peer-name-wrap"><input class="peer-name" /><small class="peer-status"></small></div>
           </div>
           <button class="toggle" type="button"></button>
         </div>
         <div class="peer-actions">
-          <button class="config-button" type="button">QR / Config</button>
-          <button class="delete-button" type="button">Delete</button>
+          <button class="config-button" type="button">QR и конфиг</button>
+          <button class="delete-button" type="button">Удалить</button>
         </div>
         <div class="peer-meta">
           <span class="allowed"></span>
@@ -71,12 +109,12 @@
         </div>
         <div class="traffic">
           <div>
-            <span>RX</span>
+            <span>Получено</span>
             <strong class="rx"></strong>
             <small class="rx-rate"></small>
           </div>
           <div>
-            <span>TX</span>
+            <span>Отправлено</span>
             <strong class="tx"></strong>
             <small class="tx-rate"></small>
           </div>
@@ -88,19 +126,19 @@
     <dialog id="config-modal" class="modal">
       <div class="modal-head">
         <strong id="modal-title">Peer config</strong>
-        <button id="modal-close" type="button">Close</button>
+        <button id="modal-close" type="button">Закрыть</button>
       </div>
       <div class="qr-wrap">
         <img id="qr-image" alt="Peer QR code" />
       </div>
-      <div id="qr-caption" class="qr-caption">Amnezia QR</div>
-      <label class="field-label" for="vpn-key-text">Amnezia vpn:// key</label>
+      <div id="qr-caption" class="qr-caption">QR-код AmneziaWG</div>
+      <label class="field-label" for="vpn-key-text">Ссылка Amnezia vpn://</label>
       <textarea id="vpn-key-text" readonly spellcheck="false"></textarea>
-      <label class="field-label" for="config-text">Config</label>
+      <label class="field-label" for="config-text">Конфигурация</label>
       <textarea id="config-text" readonly spellcheck="false"></textarea>
       <div class="modal-actions">
-        <button id="copy-vpn-key" type="button">Copy vpn:// key</button>
-        <button id="copy-config" type="button">Copy config</button>
+        <button id="copy-vpn-key" type="button">Скопировать ссылку</button>
+        <button id="copy-config" type="button">Скопировать конфиг</button>
       </div>
     </dialog>
 
