@@ -17,6 +17,13 @@ const copyConfig = document.querySelector("#copy-config");
 const routingStatusEl = document.querySelector("#routing-status");
 const routingDownloadEl = document.querySelector("#routing-download");
 const routingRefreshEl = document.querySelector("#routing-refresh");
+const usageTotalEl = document.querySelector("#usage-total");
+const usagePercentEl = document.querySelector("#usage-percent");
+const usageDetailsEl = document.querySelector("#usage-details");
+const usageRemainingEl = document.querySelector("#usage-remaining");
+const usageStatusEl = document.querySelector("#usage-status");
+const usageProgressEl = document.querySelector(".usage-progress");
+const usageProgressBarEl = document.querySelector("#usage-progress-bar");
 let latest = null;
 let busy = false;
 let qrTimer = null;
@@ -83,6 +90,31 @@ function updateRouting(data) {
   const mode = data.mode === "full" ? "полный" : "совместимый";
   routingStatusEl.textContent = `${Number(data.count || 0).toLocaleString("ru-RU")} IPv4-подсетей · ${mode} набор · обновлено ${updated}${data.stale ? " · требуется обновление" : ""}`;
   routingDownloadEl.disabled = false;
+}
+
+function updateTraffic(data) {
+  if (!data?.available) {
+    usageTotalEl.textContent = "Нет данных";
+    usagePercentEl.textContent = "—";
+    usageDetailsEl.textContent = data?.error || "Счётчик ещё запускается";
+    usageRemainingEl.textContent = "";
+    usageStatusEl.textContent = "";
+    usageProgressBarEl.style.width = "0%";
+    return;
+  }
+  const percent = Math.max(0, Number(data.percent || 0));
+  const visualPercent = Math.min(100, percent);
+  usageTotalEl.textContent = bytes(data.totalBytes);
+  usagePercentEl.textContent = `${percent.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`;
+  usageDetailsEl.textContent = `Получено ${bytes(data.rxBytes)} · отправлено ${bytes(data.txBytes)}`;
+  usageRemainingEl.textContent = `Осталось примерно ${bytes(data.remainingBytes)}`;
+  usageProgressBarEl.style.width = `${visualPercent}%`;
+  usageProgressEl.setAttribute("aria-valuenow", String(Math.round(visualPercent)));
+  usageProgressEl.classList.toggle("warning", percent >= 70 && percent < 90);
+  usageProgressEl.classList.toggle("danger", percent >= 90);
+  const updated = data.updatedAt ? new Date(data.updatedAt * 1000).toLocaleString("ru-RU") : "неизвестно";
+  const partial = data.partialMonth ? `${data.note || "Данные за месяц неполные"}. ` : "";
+  usageStatusEl.textContent = `${partial}Счётчик обновлён ${updated}${data.stale ? " · данные устарели" : ""}`;
 }
 
 function render() {
@@ -178,6 +210,7 @@ async function refresh() {
     latest = await api("/api/status");
     render();
     updateRouting(await api("/api/routing/status"));
+    updateTraffic(await api("/api/traffic"));
   }, true, true);
 }
 

@@ -25,6 +25,7 @@ INTERFACE = os.environ.get("AWG_INTERFACE", "awg0")
 SOCKET_PATH = os.environ.get("DOCKER_SOCKET", "/var/run/docker.sock")
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 STATE_FILE = DATA_DIR / "peers.json"
+TRAFFIC_FILE = DATA_DIR / "traffic.json"
 ONLINE_SECONDS = int(os.environ.get("ONLINE_SECONDS", "180"))
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8080"))
@@ -60,11 +61,19 @@ ROSCOMVPN_GEOIP_SOURCES = {
 ROSCOMVPN_GEOIP_CATEGORIES = (("direct",) if ROSCOMVPN_INCLUDE_DIRECT else ()) + ("whitelist", "private")
 ROUTING_MODE = "full" if ROSCOMVPN_INCLUDE_DIRECT else "compatible"
 MAX_REQUEST_BYTES = 16 * 1024
+AUTH_FAILURE_LIMIT = int(os.environ.get("AUTH_FAILURE_LIMIT", "5"))
+AUTH_FAILURE_WINDOW = int(os.environ.get("AUTH_FAILURE_WINDOW", "600"))
+AUTH_BLOCK_SECONDS = int(os.environ.get("AUTH_BLOCK_SECONDS", "900"))
+REQUEST_RATE_LIMIT = int(os.environ.get("REQUEST_RATE_LIMIT", "180"))
+REQUEST_RATE_WINDOW = int(os.environ.get("REQUEST_RATE_WINDOW", "60"))
+AUTH_LOG_FILE = DATA_DIR / "auth.log"
 
 STATE_LOCK = threading.Lock()
 SAMPLE_LOCK = threading.Lock()
 LAST_SAMPLE = {}
 ROUTING_LOCK = threading.Lock()
+AUTH_LOCK = threading.Lock()
+AUTH_STATE = {}
 
 
 class UnixHTTPConnection(http.client.HTTPConnection):
@@ -180,6 +189,20 @@ def routing_status():
         "sources": meta.get("sources", [ROSCOMVPN_GEOIP_SOURCES[name] for name in ROSCOMVPN_GEOIP_CATEGORIES]),
         "mode": meta.get("mode", ROUTING_MODE),
     }
+
+
+def traffic_status():
+    if not TRAFFIC_FILE.exists():
+        return {"available": False, "error": "Traffic data is not ready yet"}
+    try:
+        with TRAFFIC_FILE.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"available": False, "error": str(exc)}
+    updated_at = int(payload.get("updatedAt", 0) or 0)
+    payload["available"] = True
+    payload["stale"] = not updated_at or time.time() - updated_at > 15 * 60
+    return payload
 
 
 def fetch_cidr_list(url):
@@ -794,8 +817,120 @@ def check_auth(header):
     return hmac.compare_digest(user, ADMIN_USER) and hmac.compare_digest(password, ADMIN_PASSWORD)
 
 
+def audit_log(event, client, **fields):
+    DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    details = " ".join(f"{key}={value}" for key, value in fields.items())
+    line = f"{timestamp} {event} client={client}"
+    if details:
+        line += f" {details}"
+    with AUTH_LOCK:
+        with AUTH_LOG_FILE.open("a", encoding="utf-8") as log:
+            os.chmod(AUTH_LOG_FILE, 0o600)
+            log.write(line + "\n")
+
+
+def auth_state(client):
+    with AUTH_LOCK:
+        if client not in AUTH_STATE and len(AUTH_STATE) >= 4096:
+            oldest = min(AUTH_STATE, key=lambda key: AUTH_STATE[key].get("last_seen", 0))
+            AUTH_STATE.pop(oldest, None)
+        state = AUTH_STATE.setdefault(
+            client,
+            {
+                "failures": [],
+                "blocked_until": 0,
+                "requests": [],
+                "last_success_log": 0,
+                "last_rate_log": 0,
+                "last_seen": 0,
+            },
+        )
+        state["last_seen"] = time.time()
+        return state
+
+
+def request_allowed(client):
+    now = time.time()
+    state = auth_state(client)
+    with AUTH_LOCK:
+        state["last_seen"] = now
+        state["requests"] = [stamp for stamp in state["requests"] if now - stamp < REQUEST_RATE_WINDOW]
+        if len(state["requests"]) >= REQUEST_RATE_LIMIT:
+            return False
+        state["requests"].append(now)
+        return True
+
+
+def auth_blocked(client):
+    now = time.time()
+    state = auth_state(client)
+    with AUTH_LOCK:
+        return max(0, int(state["blocked_until"] - now))
+
+
+def record_rate_limit(client):
+    now = time.time()
+    state = auth_state(client)
+    should_log = False
+    with AUTH_LOCK:
+        if now - state["last_rate_log"] >= REQUEST_RATE_WINDOW:
+            state["last_rate_log"] = now
+            should_log = True
+    if should_log:
+        audit_log("RATE_LIMIT", client)
+
+
+def record_auth_failure(client):
+    now = time.time()
+    state = auth_state(client)
+    with AUTH_LOCK:
+        state["failures"] = [stamp for stamp in state["failures"] if now - stamp < AUTH_FAILURE_WINDOW]
+        state["failures"].append(now)
+        failures = len(state["failures"])
+        if failures >= AUTH_FAILURE_LIMIT:
+            state["blocked_until"] = now + AUTH_BLOCK_SECONDS
+            state["failures"] = []
+    audit_log("AUTH_FAILURE", client, failures=failures)
+    return failures
+
+
+def record_auth_success(client):
+    now = time.time()
+    state = auth_state(client)
+    should_log = False
+    with AUTH_LOCK:
+        state["failures"] = []
+        state["blocked_until"] = 0
+        if now - state["last_success_log"] >= AUTH_FAILURE_WINDOW:
+            state["last_success_log"] = now
+            should_log = True
+    if should_log:
+        audit_log("AUTH_SUCCESS", client)
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AWGPanel/1.0"
+    server_version = "AWGPanel"
+    sys_version = ""
+
+    def version_string(self):
+        return self.server_version
+
+    def client_ip(self):
+        forwarded = self.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip()
+        candidate = forwarded or self.client_address[0]
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            return self.client_address[0]
+
+    def begin_request(self):
+        client = self.client_ip()
+        if request_allowed(client):
+            return True
+        record_rate_limit(client)
+        self.send_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "Too many requests"}, {"Retry-After": "60"})
+        return False
 
     def end_headers(self):
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -813,18 +948,34 @@ class Handler(BaseHTTPRequestHandler):
         print("%s - %s" % (self.address_string(), fmt % args), flush=True)
 
     def require_auth(self):
-        if check_auth(self.headers.get("Authorization")):
+        client = self.client_ip()
+        retry_after = auth_blocked(client)
+        if retry_after:
+            self.send_json(
+                HTTPStatus.TOO_MANY_REQUESTS,
+                {"error": "Too many failed login attempts"},
+                {"Retry-After": str(retry_after)},
+            )
+            return False
+        authorization = self.headers.get("Authorization")
+        if check_auth(authorization):
+            record_auth_success(client)
             return True
+        if authorization:
+            record_auth_failure(client)
         self.send_response(HTTPStatus.UNAUTHORIZED)
         self.send_header("WWW-Authenticate", 'Basic realm="AWG Panel"')
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         return False
 
-    def send_json(self, status, payload):
+    def send_json(self, status, payload, headers=None):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -851,6 +1002,8 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(size).decode("utf-8"))
 
     def do_GET(self):
+        if not self.begin_request():
+            return
         if not self.require_auth():
             return
         parsed = urlparse(self.path)
@@ -862,6 +1015,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/routing/status":
             self.send_json(HTTPStatus.OK, routing_status())
+            return
+        if parsed.path == "/api/traffic":
+            self.send_json(HTTPStatus.OK, traffic_status())
             return
         if parsed.path == "/api/routing/roscomvpn-amnezia.json":
             try:
@@ -932,7 +1088,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
+        if not self.begin_request():
+            return
         if not self.require_auth():
+            return
+        fetch_site = self.headers.get("Sec-Fetch-Site", "").lower()
+        origin = self.headers.get("Origin")
+        if fetch_site == "cross-site" or (origin and not self.valid_origin(origin)):
+            audit_log("CSRF_REJECT", self.client_ip())
+            self.send_json(HTTPStatus.FORBIDDEN, {"error": "Cross-site request rejected"})
             return
         parsed = urlparse(self.path)
         parts = [unquote(part) for part in parsed.path.split("/") if part]
@@ -966,6 +1130,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
         except Exception as exc:
             self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+
+    def valid_origin(self, origin):
+        parsed = urlparse(origin)
+        host = self.headers.get("Host", "").lower()
+        scheme = self.headers.get("X-Forwarded-Proto", "https").split(",", 1)[0].strip().lower()
+        return parsed.scheme.lower() == scheme and parsed.netloc.lower() == host
 
 
 def main():
