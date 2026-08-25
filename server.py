@@ -324,7 +324,7 @@ def parse_interface_dump(dump):
         if len(parts) > 10:
             if parts[0] == INTERFACE:
                 parts = parts[1:]
-            return {
+            interface = {
                 "privateKey": parts[0],
                 "publicKey": parts[1],
                 "listenPort": parts[2],
@@ -340,6 +340,25 @@ def parse_interface_dump(dump):
                 "h3": parts[12],
                 "h4": parts[13],
             }
+            # AWG 2.x dumps stop after H1-H4 (or I1-I5). AWG 3.x appends
+            # protocol parameters after the five optional signature packets.
+            awg3_fields = {
+                "headerProtectionKey": 19,
+                "contentPaddingAddition": 20,
+                "rekeyAfterTime": 21,
+                "rekeyTimeout": 22,
+                "rejectAfterTime": 23,
+                "keepaliveTimeout": 24,
+                "maxHandshakeAttempts": 25,
+                "randomTrailers": 26,
+                "disableCookies": 27,
+            }
+            for key, index in awg3_fields.items():
+                value = parts[index] if index < len(parts) else ""
+                if value not in ("", "(null)", "(none)"):
+                    interface[key] = value
+            interface["protocolVersion"] = "3" if interface.get("headerProtectionKey") not in (None, "(off)", "off") else "2"
+            return interface
     raise ValueError("Interface dump is empty")
 
 
@@ -653,6 +672,28 @@ def build_client_config(name, address, private_key, preshared_key, server):
             f"H2 = {server['h2']}",
             f"H3 = {server['h3']}",
             f"H4 = {server['h4']}",
+        ]
+    )
+    # HeaderProtectionKey is mandatory on both ends when AWG 3.x enables it.
+    # Other AWG 3.x/3.1 device settings are mirrored from the live interface.
+    # AWG 2.x has no such dump fields and therefore keeps the old output.
+    awg3_config_fields = (
+        ("HeaderProtectionKey", "headerProtectionKey"),
+        ("ContentPaddingAddition", "contentPaddingAddition"),
+        ("RekeyAfterTime", "rekeyAfterTime"),
+        ("RekeyTimeout", "rekeyTimeout"),
+        ("RejectAfterTime", "rejectAfterTime"),
+        ("KeepaliveTimeout", "keepaliveTimeout"),
+        ("MaxHandshakeAttempts", "maxHandshakeAttempts"),
+        ("RandomTrailers", "randomTrailers"),
+        ("DisableCookies", "disableCookies"),
+    )
+    for config_name, server_name in awg3_config_fields:
+        value = server.get(server_name)
+        if value not in (None, "", "(null)", "(none)", "(off)"):
+            lines.append(f"{config_name} = {value}")
+    lines.extend(
+        [
             "",
             "[Peer]",
             f"PublicKey = {server['publicKey']}",
@@ -726,7 +767,24 @@ def get_client_config(public_key):
         client = state["clients"].get(public_key)
         if not client:
             raise ValueError("Client config is available only for peers created in this panel")
-        return client
+        client = dict(client)
+
+    # Rebuild exports from the live interface instead of trusting the snapshot
+    # saved when the peer was created. This migrates existing AWG 2.x exports
+    # after a server upgrade to AWG 3.x and follows endpoint/parameter changes.
+    private_key = client.get("privateKey")
+    preshared_key = client.get("presharedKey")
+    address = str(client.get("address", "")).split("/", 1)[0]
+    if private_key and preshared_key and address:
+        server = get_interface_config()
+        client["config"] = build_client_config(
+            client.get("name", "peer"),
+            address,
+            private_key,
+            preshared_key,
+            server,
+        )
+    return client
 
 
 def vpn_key_payload(config):

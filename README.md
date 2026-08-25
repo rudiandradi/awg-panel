@@ -26,6 +26,8 @@ https://SERVER_IP:8443
 - Peer names and disabled state are stored in `./data/peers.json`.
 - Traffic totals are stored in `./data/peers.json` and survive disable/enable cycles.
 - New peers can be created from the UI. Their client config and QR source are stored in `./data/peers.json`.
+- Client exports support AWG 2.x and automatically include live AWG 3.x/3.1 device parameters when enabled on the server.
+- Existing panel-created client exports are regenerated from the live interface when opened, so protocol and endpoint changes are reflected without recreating the peer.
 - QR/config can be shown again only for peers created by this panel, because existing peers' client private keys are not available on the server.
 - Disabling a peer removes it from the live `awg0` interface after saving its current runtime config.
 - Enabling a peer restores it from `./data/peers.json`.
