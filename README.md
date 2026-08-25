@@ -4,22 +4,32 @@ Mobile-friendly web panel for the `amnezia-awg2` container.
 
 ## Run
 
+Choose a public hostname that resolves to the server. A wildcard DNS service such as
+`awg.203.0.113.10.nip.io` works without creating DNS records. Make sure TCP ports 80/443
+and UDP port 443 are reachable, then:
+
 ```bash
 cp .env.example .env
-openssl rand -base64 24
+docker run --rm caddy:2-alpine caddy hash-password --plaintext 'YOUR_PASSWORD'
 ```
 
-Put the generated value into `PANEL_PASSWORD`, set `VPN_ENDPOINT` to your public AWG endpoint, and set `CERT_DIR` if your TLS certificate is not in `./cert`. Then:
+Set `PANEL_PASSWORD` to the same password used by Caddy, `PANEL_DOMAIN` to the public
+hostname, and `PANEL_AUTH_HASH` to the generated bcrypt hash. Keep the hash single-quoted
+in `.env` so Docker Compose does not expand its `$` characters. Also set `VPN_ENDPOINT`
+and `CERT_DIR` for the internal panel endpoint. Then:
 
 ```bash
 docker compose up -d --build
 ```
 
-Open:
+Open the public URL:
 
 ```text
-https://SERVER_IP:8443
+https://awg.SERVER_IP.nip.io
 ```
+
+Caddy obtains and renews the public TLS certificate automatically. The panel remains bound
+to `https://127.0.0.1:8443` for local maintenance.
 
 ## Notes
 
@@ -33,7 +43,7 @@ https://SERVER_IP:8443
 - Enabling a peer restores it from `./data/peers.json`.
 - If `amnezia-awg2` is recreated with different keys and the panel has not seen them, old disabled peers cannot be restored automatically.
 - The panel mounts `/var/run/docker.sock`; expose it only behind a firewall/VPN/reverse proxy.
-- The included compose file serves HTTPS using `fullchain.pem` and `privkey.pem` from `CERT_DIR` or `./cert`.
+- Caddy protects the public endpoint with Basic Auth; the internal panel keeps its own authentication and TLS.
 
 ## Russian sites outside the VPN tunnel
 

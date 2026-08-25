@@ -22,7 +22,7 @@ services:
       - ./data:/data
       - ${CERT_DIR:-./cert}:/cert:ro
     ports:
-      - "${PANEL_PORT:-8080}:8080"
+      - "127.0.0.1:${PANEL_PORT:-8443}:8080"
     read_only: true
     tmpfs:
       - /tmp:mode=1777,noexec,nosuid,size=32m
@@ -30,3 +30,27 @@ services:
     mem_limit: 256m
     security_opt:
       - no-new-privileges:true
+
+  caddy:
+    image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    container_name: awg-panel-caddy
+    restart: unless-stopped
+    depends_on:
+      - awg-panel
+    environment:
+      PANEL_DOMAIN: ${PANEL_DOMAIN:?set PANEL_DOMAIN in .env}
+      PANEL_AUTH_HASH: ${PANEL_AUTH_HASH:?set PANEL_AUTH_HASH in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  caddy_data:
+  caddy_config:

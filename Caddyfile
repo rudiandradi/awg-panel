@@ -1,4 +1,20 @@
-109-107-174-205.nip.io {
-    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
-    reverse_proxy awg-panel:8080
+{$PANEL_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+	}
+
+	basic_auth {
+		admin {$PANEL_AUTH_HASH}
+	}
+
+	reverse_proxy https://awg-panel:8080 {
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
 }
