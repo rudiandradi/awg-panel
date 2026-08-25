@@ -24,6 +24,7 @@ const usageRemainingEl = document.querySelector("#usage-remaining");
 const usageStatusEl = document.querySelector("#usage-status");
 const usageProgressEl = document.querySelector(".usage-progress");
 const usageProgressBarEl = document.querySelector("#usage-progress-bar");
+const protocolBannerEl = document.querySelector("#protocol-banner");
 let latest = null;
 let busy = false;
 let qrTimer = null;
@@ -78,6 +79,7 @@ function updateSummary(data) {
   document.querySelector("#rx-total").textContent = bytes(rx);
   document.querySelector("#tx-total").textContent = bytes(tx);
   document.querySelector("#updated-at").textContent = new Date((data.updatedAt || 0) * 1000).toLocaleTimeString();
+  protocolBannerEl.hidden = data.interface?.protocolVersion !== "3";
 }
 
 function updateRouting(data) {

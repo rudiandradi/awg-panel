@@ -441,6 +441,9 @@ def sync_peer_order(state, peers):
 def get_status():
     dump = docker_exec(f"awg show {shlex.quote(INTERFACE)} dump")
     interface, active_peers = parse_dump(dump)
+    device = parse_interface_dump(dump)
+    if interface:
+        interface["protocolVersion"] = device["protocolVersion"]
     active_keys = {peer["publicKey"] for peer in active_peers}
 
     with STATE_LOCK:
