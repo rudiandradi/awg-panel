@@ -13,6 +13,7 @@
 	}
 
 	reverse_proxy https://awg-panel:8080 {
+		header_up Host {http.request.host}
 		transport http {
 			tls_insecure_skip_verify
 		}
